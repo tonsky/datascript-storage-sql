@@ -40,3 +40,6 @@
               _       (d/store db storage)
               db'     (d/restore storage)]
           (is (= db db')))))))
+
+(comment
+  (t/run-all-tests))

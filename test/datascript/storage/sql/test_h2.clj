@@ -1,4 +1,4 @@
-(ns datascript.storage.sql.test-sqlite
+(ns datascript.storage.sql.test-h2
   (:require
     [clojure.test :as t :refer [deftest is are testing]]
     [datascript.core :as d]
@@ -8,12 +8,12 @@
     [java.nio.file Files Path]
     [java.sql DriverManager]))
 
-(deftest test-sqlite []
+(deftest test-h2 []
   (test-core/test-storage
-    {:dbtype     :sqlite
-     :connect-fn #(DriverManager/getConnection "jdbc:sqlite:target/db.sqlite")
-     :reset-fn   #(Files/deleteIfExists (Path/of "target/db.sqlite" (make-array String 0)))}))
+    {:dbtype     :h2
+     :connect-fn #(DriverManager/getConnection "jdbc:h2:./target/db.h2")
+     :reset-fn   #(Files/deleteIfExists (Path/of "target/db.h2" (make-array String 0)))}))
 
 (comment
-  (t/run-test-var #'test-sqlite)
+  (t/run-test-var #'test-h2)
   (t/run-tests *ns*))

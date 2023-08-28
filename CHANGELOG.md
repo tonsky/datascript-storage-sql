@@ -1,6 +1,6 @@
 # WIP
 
-- Support `:postgresql`
+- Support `:postgresql`, `:h2`
 
 # 0.1.0
 

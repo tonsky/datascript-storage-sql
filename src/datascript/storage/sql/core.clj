@@ -23,7 +23,27 @@
   (with-open [stmt (.createStatement conn)]
     (.execute stmt sql)))
 
-(defn store-impl [^Connection conn opts addr+data-seq]
+(defmulti store-impl
+  (fn [conn opts addr+data-seq]
+    (:dbtype opts)))
+
+(defmethod store-impl :h2 [^Connection conn opts addr+data-seq]
+  (let [{:keys [table binary? freeze-str freeze-bytes batch-size]} opts
+        sql (str "merge into " table " key (addr) values (?, ?)")]
+    (with-tx conn
+      (with-open [stmt (.prepareStatement conn sql)]
+        (doseq [part (partition-all batch-size addr+data-seq)]
+          (doseq [[addr data] part]
+            (.setLong stmt 1 addr)
+            (if binary?
+              (let [content ^bytes (freeze-bytes data)]
+                (.setBytes stmt 2 content))
+              (let [content ^String (freeze-str data)]
+                (.setString stmt 2 content)))
+            (.addBatch stmt))
+          (.executeBatch stmt))))))
+
+(defmethod store-impl :default [^Connection conn opts addr+data-seq]
   (let [{:keys [table binary? freeze-str freeze-bytes batch-size]} opts
         sql (str
               "insert into " table " (addr, content) "
@@ -42,7 +62,7 @@
                 (.setString stmt 2 content)
                 (.setString stmt 3 content)))
             (.addBatch stmt))
-        (.executeBatch stmt))))))
+          (.executeBatch stmt))))))
 
 (defn restore-impl [^Connection conn opts addr]
   (let [{:keys [table binary? thaw-str thaw-bytes]} opts
@@ -72,6 +92,31 @@
           (.addBatch stmt))
         (.executeBatch stmt)))))
 
+(defmulti ddl
+  (fn [opts]
+    (:dbtype opts)))
+
+(defmethod ddl :sqlite [{:keys [table binary?]}]
+  (str
+    "create table if not exists " table
+    " (addr INTEGER primary key, "
+    "  content " (if binary? "BLOB" "TEXT") ")"))
+
+(defmethod ddl :h2 [{:keys [table binary?]}]
+  (str
+    "create table if not exists " table
+    " (addr BIGINT primary key, "
+    "  content " (if binary? "BINARY VARYING" "CHARACTER VARYING") ")"))
+
+(defmethod ddl :postgresql [{:keys [table binary?]}]
+  (str
+    "create table if not exists " table
+    " (addr BIGINT primary key, "
+    "  content " (if binary? "BYTEA" "TEXT") ")"))
+
+(defmethod ddl :default [{:keys [dbtype]}]
+  (throw (IllegalArgumentException. (str "Unsupported :dbtype " (pr-str dbtype)))))
+
 (defn merge-opts [opts]
   (let [opts (merge
                {:freeze-str pr-str
@@ -80,22 +125,8 @@
                 :table      "datascript"}
                opts)
         opts (assoc opts
-               :binary? (boolean (and (:freeze-bytes opts) (:thaw-bytes opts))))
-        type (:dbtype opts)
-        ddl  (case type
-               :sqlite
-               (str
-                 "create table if not exists " (:table opts)
-                 " (addr INTEGER primary key, "
-                 "  content " (if (:binary? opts) "BLOB" "TEXT") ")")
-               :postgresql
-               (str
-                 "create table if not exists " (:table opts)
-                 " (addr BIGINT primary key, "
-                 "  content " (if (:binary? opts) "BYTEA" "TEXT") ")")
-               (throw (IllegalArgumentException. (str "Unsupported :dbtype " (pr-str type)))))
-        opts (merge {:ddl ddl} opts)]
-    opts))
+               :binary? (boolean (and (:freeze-bytes opts) (:thaw-bytes opts))))]
+    (merge {:ddl (ddl opts)} opts)))
 
 (defn make 
   ([conn]
