@@ -7,7 +7,7 @@ See [datascript/doc/storage.md](https://github.com/tonsky/datascript/blob/master
 Add this to `deps.edn`:
 
 ```clj
-io.github.tonsky/datascript-storage-sql {:mvn/version "0.1.0"}
+io.github.tonsky/datascript-storage-sql {:mvn/version "1.0.0"}
 ```
 
 Create storage by passing in `java.sql.Connection` and `:dbtype` option:
@@ -65,9 +65,10 @@ or
 
 Currently supported `:dbtype`-s:
 
-- `:sqlite`
 - `:h2`
+- `:mysql`
 - `:postgresql`
+- `:sqlite`
 
 If needed, you can close connection through storage:
 

@@ -3,18 +3,13 @@
   datascript/datascript {:mvn/version "1.5.2"}}
  :aliases
  {:dev
-  {:extra-paths
-   ["dev"]
+  {:extra-paths ["dev"]
    :extra-deps
    {org.clojure/tools.namespace {:mvn/version "1.4.4"}}}
-  :sqlite
-  {:extra-deps
-   {org.xerial/sqlite-jdbc {:mvn/version "3.42.0.0"}}}
-  :h2
-  {:extra-deps
-   {com.h2database/h2 {:mvn/version "2.2.220"}}}
-  :postgresql
-  {:extra-deps
-   {org.postgresql/postgresql {:mvn/version "42.6.0"}}}}}
-      
-           
+  :test
+  {:extra-paths ["test"]
+   :extra-deps
+   {com.h2database/h2           {:mvn/version "2.2.220"}
+    com.mysql/mysql-connector-j {:mvn/version "8.1.0"}
+    org.postgresql/postgresql   {:mvn/version "42.6.0"}
+    org.xerial/sqlite-jdbc      {:mvn/version "3.42.0.0"}}}}}

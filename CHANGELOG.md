@@ -1,6 +1,6 @@
-# WIP
+# 1.0.0
 
-- Support `:postgresql`, `:h2`
+- Support `:h2`, `:mysql`, `:postgresql` dbtypes
 
 # 0.1.0
 

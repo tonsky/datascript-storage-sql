@@ -19,36 +19,31 @@
        (finally
          (.setAutoCommit conn# true)))))
 
-(defn execute! [conn sql]
+(defn execute! [^Connection conn sql]
   (with-open [stmt (.createStatement conn)]
     (.execute stmt sql)))
 
-(defmulti store-impl
-  (fn [conn opts addr+data-seq]
-    (:dbtype opts)))
+(defmulti upsert-dml :dbtype)
 
-(defmethod store-impl :h2 [^Connection conn opts addr+data-seq]
-  (let [{:keys [table binary? freeze-str freeze-bytes batch-size]} opts
-        sql (str "merge into " table " key (addr) values (?, ?)")]
-    (with-tx conn
-      (with-open [stmt (.prepareStatement conn sql)]
-        (doseq [part (partition-all batch-size addr+data-seq)]
-          (doseq [[addr data] part]
-            (.setLong stmt 1 addr)
-            (if binary?
-              (let [content ^bytes (freeze-bytes data)]
-                (.setBytes stmt 2 content))
-              (let [content ^String (freeze-str data)]
-                (.setString stmt 2 content)))
-            (.addBatch stmt))
-          (.executeBatch stmt))))))
+(defmethod upsert-dml :h2 [opts]
+  (str "merge into " (:table opts) " key (addr) values (?, ?)"))
 
-(defmethod store-impl :default [^Connection conn opts addr+data-seq]
+(defmethod upsert-dml :mysql [opts]
+  (str
+    "insert into " (:table opts) " (addr, content) "
+    "values (?, ?) "
+    "ON DUPLICATE KEY UPDATE content = ?"))
+
+(defmethod upsert-dml :default [opts]
+  (str
+    "insert into " (:table opts) " (addr, content) "
+    "values (?, ?) "
+    "on conflict(addr) do update set content = ?"))
+
+(defn store-impl [^Connection conn opts addr+data-seq]
   (let [{:keys [table binary? freeze-str freeze-bytes batch-size]} opts
-        sql (str
-              "insert into " table " (addr, content) "
-              "values (?, ?) "
-              "on conflict(addr) do update set content = ?")]
+        sql (upsert-dml opts)
+        cnt (count (re-seq #"\?" sql))]
     (with-tx conn
       (with-open [stmt (.prepareStatement conn sql)]
         (doseq [part (partition-all batch-size addr+data-seq)]
@@ -57,10 +52,12 @@
             (if binary?
               (let [content ^bytes (freeze-bytes data)]
                 (.setBytes stmt 2 content)
-                (.setBytes stmt 3 content))
+                (when (= 3 cnt)
+                  (.setBytes stmt 3 content)))
               (let [content ^String (freeze-str data)]
                 (.setString stmt 2 content)
-                (.setString stmt 3 content)))
+                (when (= 3 cnt)
+                  (.setString stmt 3 content))))
             (.addBatch stmt))
           (.executeBatch stmt))))))
 
@@ -107,6 +104,12 @@
     "create table if not exists " table
     " (addr BIGINT primary key, "
     "  content " (if binary? "BINARY VARYING" "CHARACTER VARYING") ")"))
+
+(defmethod ddl :mysql [{:keys [table binary?]}]
+  (str
+    "create table if not exists " table
+    " (addr BIGINT primary key, "
+    "  content " (if binary? "LONGBLOB" "LONGTEXT") ")"))
 
 (defmethod ddl :postgresql [{:keys [table binary?]}]
   (str

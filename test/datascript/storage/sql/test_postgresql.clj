@@ -10,7 +10,7 @@
 
 (deftest test-postgresql []
   (test-core/test-storage
-    {:dbtype   :postgresql
+    {:dbtype :postgresql
      :reset-fn
      #(with-open [conn (DriverManager/getConnection "jdbc:postgresql:test_datascript")]
         (storage-sql/execute! conn "drop table if exists datascript"))
