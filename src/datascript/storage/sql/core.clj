@@ -19,9 +19,9 @@
        (finally
          (.setAutoCommit conn# true)))))
 
-(defn init-db-impl [^Connection conn opts]
+(defn execute! [conn sql]
   (with-open [stmt (.createStatement conn)]
-    (.execute stmt (:ddl opts))))
+    (.execute stmt sql)))
 
 (defn store-impl [^Connection conn opts addr+data-seq]
   (let [{:keys [table binary? freeze-str freeze-bytes batch-size]} opts
@@ -88,16 +88,22 @@
                  "create table if not exists " (:table opts)
                  " (addr INTEGER primary key, "
                  "  content " (if (:binary? opts) "BLOB" "TEXT") ")")
+               :postgresql
+               (str
+                 "create table if not exists " (:table opts)
+                 " (addr BIGINT primary key, "
+                 "  content " (if (:binary? opts) "BYTEA" "TEXT") ")")
                (throw (IllegalArgumentException. (str "Unsupported :dbtype " (pr-str type)))))
         opts (merge {:ddl ddl} opts)]
     opts))
 
 (defn make 
   ([conn]
+   {:pre [(instance? Connection conn)]}
    (make conn {}))
   ([conn opts]
    (let [opts (merge-opts opts)]
-     (init-db-impl conn opts)
+     (execute! conn (:ddl opts))
      (with-meta
        {:conn conn}
        {'datascript.storage/-store

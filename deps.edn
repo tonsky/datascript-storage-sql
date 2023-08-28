@@ -1,3 +1,17 @@
 {:deps
  {org.clojure/clojure   {:mvn/version "1.11.1"}
-  datascript/datascript {:mvn/version "1.5.2"}}}
+  datascript/datascript {:mvn/version "1.5.2"}}
+ :aliases
+ {:dev
+  {:extra-paths
+   ["dev"]
+   :extra-deps
+   {org.clojure/tools.namespace {:mvn/version "1.4.4"}}}
+  :sqlite
+  {:extra-deps
+   {org.xerial/sqlite-jdbc {:mvn/version "3.42.0.0"}}}
+  :postgresql
+  {:extra-deps
+   {org.postgresql/postgresql {:mvn/version "42.6.0"}}}}}
+      
+           

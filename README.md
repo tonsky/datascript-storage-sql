@@ -66,6 +66,7 @@ or
 Currently supported `:dbtype`-s:
 
 - `:sqlite`
+- `:postgresql`
 
 If needed, you can close connection through storage:
 
