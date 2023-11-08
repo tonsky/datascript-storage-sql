@@ -5,9 +5,11 @@
     [datascript.core :as d]
     [datascript.storage :as storage])
   (:import
+    [java.lang AutoCloseable]
+    [java.lang.reflect InvocationHandler Method Proxy]
     [java.sql Connection DriverManager ResultSet SQLException Statement]
     [javax.sql DataSource]
-    [java.lang.reflect InvocationHandler Method Proxy]))
+    [java.util.concurrent.locks Condition Lock ReentrantLock]))
 
 (defmacro with-conn [[conn datasource] & body]
   (let [conn (vary-meta conn assoc :tag Connection)]
@@ -143,7 +145,25 @@
                :binary? (boolean (and (:freeze-bytes opts) (:thaw-bytes opts))))]
     (merge {:ddl (ddl opts)} opts)))
 
-(defn make 
+(defn make
+  "Create new DataScript storage from javax.sql.DataSource.
+   
+   Mandatory opts:
+   
+     :dbtype       :: keyword, one of :h2, :mysql, :postgresql or :sqlite
+   
+   Optional opts:
+   
+     :batch-size   :: int, default 1000
+     :table        :: string, default \"datascript\"
+     :ddl          :: custom DDL to create :table. Must have `addr, int` and `content, text` columns
+     :freeze-str   :: (fn [any]) -> str, serialize DataScript segments, default pr-str
+     :thaw-str     :: (fn [str]) -> any, deserialize DataScript segments, default clojure.edn/read-string
+     :freeze-bytes :: (fn [any]) -> bytes, same idea as freeze-str, but for binary serialization
+     :thaw-bytes   :: (fn [bytes]) -> any
+   
+   :freeze-str and :thaw-str, :freeze-bytes and :thaw-bytes should come in pairs, and are mutually exclusive
+   (it’s either binary or string serialization)"
   ([datasource]
    {:pre [(instance? DataSource datasource)]}
    (make datasource {}))
@@ -170,42 +190,60 @@
         
         'datascript.storage/-delete
         (fn [_ addr-seq]
-          (with-open [conn datasource]
+          (with-conn [conn datasource]
             (delete-impl conn opts addr-seq)))}))))
 
-(defn swap-return! [*atom f & args]
-  (let [*res (volatile! nil)]
-    (swap! *atom
-      (fn [atom]
-        (let [[res atom'] (apply f atom args)]
-          (vreset! *res res)
-          atom')))
-    @*res))
+(defn close
+  "If storage was created with DataSource that also implements AutoCloseable,
+   it will close that DataSource"
+  [storage]
+  (let [datasource (:datasource storage)]
+    (when (instance? AutoCloseable datasource)
+      (.close ^AutoCloseable datasource))))
 
-(defrecord Pool [*atom ^DataSource datasource opts]
-  java.lang.AutoCloseable
+(defmacro with-lock [lock & body]
+  `(let [^Lock lock# ~lock]
+     (try
+       (.lock lock#)
+       ~@body
+       (finally
+         (.unlock lock#)))))
+
+(defrecord Pool [*atom ^Lock lock ^Condition condition ^DataSource datasource opts]
+  AutoCloseable
   (close [_]
     (let [[{:keys [taken free]} _] (swap-vals! *atom #(-> % (update :taken empty) (update :idle empty)))]
       (doseq [conn (concat free taken)]
         (try
-          (.close conn)
+          (.close ^Connection conn)
           (catch Exception e
             (.printStackTrace e))))))
   
   DataSource
-  (getConnection [_]
-    (let [conn (swap-return! *atom
-                 (fn [atom]
-                   (if-some [conn (peek (:idle atom))]
-                     [conn (-> atom
-                             (update :taken conj conn)
-                             (update :idle pop))]
-                     [nil atom])))
-          conn (or conn
-                 (let [conn (.getConnection datasource)]
-                   (swap! *atom update :taken conj conn)
-                   conn))
-          conn ^Connection conn
+  (getConnection [this]
+    (let [^Connection conn (with-lock lock
+                             (loop []
+                               (let [atom @*atom]
+                                 (cond
+                                   ;; idle connections available
+                                   (> (count (:idle atom)) 0)
+                                   (let [conn (peek (:idle atom))]
+                                     (swap! *atom #(-> %
+                                                     (update :taken conj conn)
+                                                     (update :idle pop)))
+                                     conn)
+                       
+                                   ;; has space for new connection
+                                   (< (count (:taken atom)) (:max-conn opts))
+                                   (let [conn (.getConnection datasource)]
+                                     (swap! *atom update :taken conj conn)
+                                     conn)
+                       
+                                   ;; already at limit
+                                   :else
+                                   (do
+                                     (.await condition)
+                                     (recur))))))
           *closed? (volatile! false)]
       (Proxy/newProxyInstance
         (.getClassLoader Connection)
@@ -220,14 +258,18 @@
                     (.rollback conn)
                     (.setAutoCommit conn true))
                   (vreset! *closed? true)
-                  (when-some [conn (swap-return! *atom
-                                     (fn [atom]
-                                       (if (>= (count (:idle atom)) (:max-conn opts))
-                                         [conn (update atom :taken disj conn)]
-                                         [nil  (-> atom
-                                                 (update :taken disj conn)
-                                                 (update :idle conj conn))])))]
-                    (.close conn))
+                  (with-lock lock
+                    (if (< (count (:idle @*atom)) (:max-idle-conn opts))
+                      ;; normal return to pool
+                      (do
+                        (swap! *atom #(-> %
+                                        (update :taken disj conn)
+                                        (update :idle conj conn)))
+                        (.signal condition))
+                      ;; excessive idle conn
+                      (do
+                        (swap! *atom update :taken disj conn)
+                        (.close conn))))
                   nil)
                 
                 "isClosed"
@@ -237,13 +279,25 @@
                 (.invoke method conn args)))))))))
 
 (defn pool
-  ([datasource]
-   (pool datasource {}))
-  ([datasource opts]
-   (Pool.
-     (atom {:taken #{}
-            :idle  []})
-     datasource
-     (merge
-       {:max-conn 4}
-       opts))))
+  "Simple connection pool.
+   
+   Accepts javax.sql.DataSource, returns javax.sql.DataSource implementation
+   that creates java.sql.Connection on demand, up to :max-conn, and keeps up
+   to :max-idle-conn when no demand.
+   
+   Implements AutoCloseable, which closes all pooled connections."
+  (^DataSource [datasource]
+    (pool datasource {}))
+  (^DataSource [datasource opts]
+    {:pre [(instance? DataSource datasource)]}
+    (let [lock (ReentrantLock.)]
+      (Pool.
+        (atom {:taken #{}
+               :idle  []})
+        lock
+        (.newCondition lock)
+        datasource
+        (merge
+          {:max-idle-conn 4
+           :max-conn      10}
+          opts)))))

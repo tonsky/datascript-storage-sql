@@ -71,7 +71,26 @@ Currently supported `:dbtype`-s:
 - `:postgresql`
 - `:sqlite`
 
-If needed, you can close connection through storage:
+If your JDBC driver only provides you with `DataSource` and you want to add some basic pooling on top, use `storage-sql/pool`:
+
+```
+(def datasource
+  (doto (SQLiteDataSource.)
+    (.setUrl "jdbc:sqlite:target/db.sqlite")))
+
+(def pooled-datasource
+  (storage-sql/pool datasource
+    {:max-conn      10
+     :max-idle-conn 4}))
+
+(def storage
+  (storage-sql/make pooled-datasource
+    {:dbtype :sqlite}))
+```
+
+`pool` takes non-pooled `DataSource` and returns new `DataSource` that pools connections for you.
+
+If you used pool to create storage, you can close it this way:
 
 ```
 (storage-sql/close storage)

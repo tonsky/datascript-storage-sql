@@ -5,7 +5,8 @@
     [datascript.storage.sql.test-h2]
     [datascript.storage.sql.test-mysql]
     [datascript.storage.sql.test-postgresql]
-    [datascript.storage.sql.test-sqlite]))
+    [datascript.storage.sql.test-sqlite]
+    [datascript.storage.sql.test-pool]))
 
 (defn -main [& args]
   (t/run-all-tests #"datascript\.storage\.sql\..*"))
