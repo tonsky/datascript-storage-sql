@@ -5,7 +5,13 @@
     [datascript.core :as d]
     [datascript.storage.sql.core :as storage-sql])
   (:import
-    [java.sql Connection]))
+    [java.sql Connection]
+    [javax.sql DataSource]))
+
+(defn datasource [connect-fn]
+  (reify DataSource
+    (getConnection [_]
+      (connect-fn))))
 
 (defn test-storage [{:keys [dbtype connect-fn reset-fn]}]
   (let [schema {:id {:db/unique :db.unique/identity}}
@@ -15,30 +21,27 @@
                  :age   38}]]
     (reset-fn)
     (testing "Read back same conn"
-      (with-open [conn ^Connection (connect-fn)]
-        (let [db      (d/db-with (d/empty-db schema) tx)
-              storage (storage-sql/make conn
-                        {:dbtype dbtype})
-              _       (d/store db storage)
-              db'     (d/restore storage)]
-          (is (= db db')))))
+      (let [db      (d/db-with (d/empty-db schema) tx)
+            storage (storage-sql/make (datasource connect-fn)
+                      {:dbtype dbtype})
+            _       (d/store db storage)
+            db'     (d/restore storage)]
+        (is (= db db'))))
     
     (testing "Read back new conn"
-      (with-open [conn ^Connection (connect-fn)]
-        (let [db      (d/db-with (d/empty-db schema) tx)
-              storage (storage-sql/make conn
-                        {:dbtype dbtype})
-              db'     (d/restore storage)]
-          (is (= db db')))))
+      (let [db      (d/db-with (d/empty-db schema) tx)
+            storage (storage-sql/make (datasource connect-fn)
+                      {:dbtype dbtype})
+            db'     (d/restore storage)]
+        (is (= db db'))))
     
     (reset-fn)
     (testing "Rountrip binary"
-      (with-open [conn ^Connection (connect-fn)]
-        (let [db      (d/db-with (d/empty-db schema) tx)
-              storage (storage-sql/make conn
-                        {:dbtype       dbtype
-                         :freeze-bytes #(.getBytes (pr-str %) "UTF-8")
-                         :thaw-bytes   #(edn/read-string (String. ^bytes % "UTF-8"))})
-              _       (d/store db storage)
-              db'     (d/restore storage)]
-          (is (= db db')))))))
+      (let [db      (d/db-with (d/empty-db schema) tx)
+            storage (storage-sql/make (datasource connect-fn)
+                      {:dbtype       dbtype
+                       :freeze-bytes #(.getBytes (pr-str %) "UTF-8")
+                       :thaw-bytes   #(edn/read-string (String. ^bytes % "UTF-8"))})
+            _       (d/store db storage)
+            db'     (d/restore storage)]
+        (is (= db db'))))))

@@ -5,7 +5,16 @@
     [datascript.core :as d]
     [datascript.storage :as storage])
   (:import
-    [java.sql Connection DriverManager ResultSet SQLException Statement]))
+    [java.sql Connection DriverManager ResultSet SQLException Statement]
+    [javax.sql DataSource]
+    [java.lang.reflect InvocationHandler Method Proxy]))
+
+(defmacro with-conn [[conn datasource] & body]
+  (let [conn (vary-meta conn assoc :tag Connection)]
+    `(let [^DataSource datasource# ~datasource]
+       (with-open [~conn (.getConnection datasource#)]
+         (locking ~conn
+           ~@body)))))
 
 (defmacro with-tx [conn & body]
   `(let [conn# ~conn]
@@ -14,7 +23,10 @@
        ~@body
        (.commit conn#)
        (catch Exception e#
-         (.rollback conn#)
+         (try
+           (.rollback conn#)
+           (catch Exception ee#
+             (.addSuppressed e# ee#)))
          (throw e#))
        (finally
          (.setAutoCommit conn# true)))))
@@ -132,29 +144,106 @@
     (merge {:ddl (ddl opts)} opts)))
 
 (defn make 
-  ([conn]
-   {:pre [(instance? Connection conn)]}
-   (make conn {}))
-  ([conn opts]
+  ([datasource]
+   {:pre [(instance? DataSource datasource)]}
+   (make datasource {}))
+  ([datasource opts]
    (let [opts (merge-opts opts)]
-     (execute! conn (:ddl opts))
+     (with-conn [conn datasource]
+       (execute! conn (:ddl opts)))
      (with-meta
-       {:conn conn}
+       {:datasource datasource}
        {'datascript.storage/-store
         (fn [_ addr+data-seq]
-          (store-impl conn opts addr+data-seq))
+          (with-conn [conn datasource]
+            (store-impl conn opts addr+data-seq)))
         
         'datascript.storage/-restore
         (fn [_ addr]
-          (restore-impl conn opts addr))
+          (with-conn [conn datasource]
+            (restore-impl conn opts addr)))
         
         'datascript.storage/-list-addresses
         (fn [_]
-          (list-impl conn opts))
+          (with-conn [conn datasource]
+            (list-impl conn opts)))
         
         'datascript.storage/-delete
         (fn [_ addr-seq]
-          (delete-impl conn opts addr-seq))}))))
+          (with-open [conn datasource]
+            (delete-impl conn opts addr-seq)))}))))
 
-(defn close [storage]
-  (.close ^Connection (:conn storage)))
+(defn swap-return! [*atom f & args]
+  (let [*res (volatile! nil)]
+    (swap! *atom
+      (fn [atom]
+        (let [[res atom'] (apply f atom args)]
+          (vreset! *res res)
+          atom')))
+    @*res))
+
+(defrecord Pool [*atom ^DataSource datasource opts]
+  java.lang.AutoCloseable
+  (close [_]
+    (let [[{:keys [taken free]} _] (swap-vals! *atom #(-> % (update :taken empty) (update :idle empty)))]
+      (doseq [conn (concat free taken)]
+        (try
+          (.close conn)
+          (catch Exception e
+            (.printStackTrace e))))))
+  
+  DataSource
+  (getConnection [_]
+    (let [conn (swap-return! *atom
+                 (fn [atom]
+                   (if-some [conn (peek (:idle atom))]
+                     [conn (-> atom
+                             (update :taken conj conn)
+                             (update :idle pop))]
+                     [nil atom])))
+          conn (or conn
+                 (let [conn (.getConnection datasource)]
+                   (swap! *atom update :taken conj conn)
+                   conn))
+          conn ^Connection conn
+          *closed? (volatile! false)]
+      (Proxy/newProxyInstance
+        (.getClassLoader Connection)
+        (into-array Class [Connection])
+        (reify InvocationHandler
+          (invoke [this proxy method args]
+            (let [method ^Method method]
+              (case (.getName method)
+                "close"
+                (do
+                  (when-not (.getAutoCommit conn)
+                    (.rollback conn)
+                    (.setAutoCommit conn true))
+                  (vreset! *closed? true)
+                  (when-some [conn (swap-return! *atom
+                                     (fn [atom]
+                                       (if (>= (count (:idle atom)) (:max-conn opts))
+                                         [conn (update atom :taken disj conn)]
+                                         [nil  (-> atom
+                                                 (update :taken disj conn)
+                                                 (update :idle conj conn))])))]
+                    (.close conn))
+                  nil)
+                
+                "isClosed"
+                (or @*closed? (.invoke method conn args))
+                
+                ;; else
+                (.invoke method conn args)))))))))
+
+(defn pool
+  ([datasource]
+   (pool datasource {}))
+  ([datasource opts]
+   (Pool.
+     (atom {:taken #{}
+            :idle  []})
+     datasource
+     (merge
+       {:max-conn 4}
+       opts))))

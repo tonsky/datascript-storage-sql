@@ -4,7 +4,7 @@
   :url         "https://github.com/tonsky/datascript-storage-sql"
   :dependencies
   [[org.clojure/clojure "1.11.1"]
-   [datascript/datascript "1.5.2"]]
+   [datascript/datascript "1.5.4"]]
   :deploy-repositories
   {"clojars"
    {:url "https://clojars.org/repo"

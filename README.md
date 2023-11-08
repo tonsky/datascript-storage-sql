@@ -7,24 +7,25 @@ See [datascript/doc/storage.md](https://github.com/tonsky/datascript/blob/master
 Add this to `deps.edn`:
 
 ```clj
-io.github.tonsky/datascript-storage-sql {:mvn/version "1.0.0"}
+io.github.tonsky/datascript-storage-sql {:mvn/version "2.0.0"}
 ```
 
-Create storage by passing in `java.sql.Connection` and `:dbtype` option:
+Create storage by passing in `javax.sql.DataSource` and `:dbtype` option:
 
 ```clj
-(def conn
-  (DriverManager/getConnection "jdbc:sqlite:target/db.sqlite"))
+(def datasource
+  (doto (org.sqlite.SQLiteDataSource.)
+    (.setUrl "jdbc:sqlite:target/db.sqlite")))
 
 (def storage
-  (storage-sql/make conn
+  (storage-sql/make datasource
     {:dbtype :sqlite}))
  ```
 
 You can also pass optional options:
 
 ```clj
-(storage-sql/make conn
+(storage-sql/make datasource
   {:dbtype     :sqlite
    :batch-size 1000
    :table      "datascript"
@@ -36,7 +37,7 @@ You can also pass optional options:
 Or use binary serialization:
 
 ```clj
-(storage-sql/make conn
+(storage-sql/make datasource
   {:dbtype :sqlite
    
    :freeze-bytes
